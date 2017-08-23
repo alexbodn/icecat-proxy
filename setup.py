@@ -10,5 +10,8 @@ setup (
 	author_email='alexbodn@gmail.com',
 	url='http://www.resheteva.org',
 	packages=['icecat_proxy'],
+	requires: [
+		'requests-cache', 
+	]
 )
 

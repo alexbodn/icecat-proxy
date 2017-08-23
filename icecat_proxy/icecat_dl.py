@@ -1,6 +1,10 @@
 # icecat download
 
 import requests
+
+from _filecache import ICECATCacheControl, ICECATFileCache, url_to_file_path
+
+import shutil
 import os
 import gzip
 from lxml import objectify, etree
@@ -8,107 +12,92 @@ from lxml import objectify, etree
 
 class IceCatLoader(object):
 
-	host = 'https://data.icecat.biz/'
+	host = 'data.icecat.biz/'
 	root = 'export/freexml/'
+
 	_index = '/icecat-free.xml'
 
 	refs = 'refs/%s.xml'
 	refs_gz = 'refs/%s.xml.gz'
 
-	chunk_size = 1024 * 1024
-
 	def __init__(self, config):
 
 		self.user = config['user']
 		self.passwd = config['passwd']
-		self.cache = config['cache']
+		cache = config['cache']
+		self.file_cache = ICECATFileCache(cache+'1', with_index=self._index)
 
-	def dl_xml(
-			self, path, session=None, with_index='', force=False, root=None, 
-			parser=objectify, 
-		):
+	def dl_xml(self, path, session=None, root=None, parser=objectify, **kw):
 
 		path = (self.root if root is None else root) + path
+		url = 'https://' + self.host + path
 
-		dl_file = os.path.join(self.cache, path)
-		if not (dl_file.endswith('.xml') or dl_file.endswith('.xml.gz')):
-			if with_index:
-				dl_file += with_index
-
-		if not os.path.exists(dl_file):
-			force = True
-
-		objectified_xml = None
-		if not force:
-			try:
-				objectified_xml = parser.parse(dl_file)
-			except:
-				pass
-		if objectified_xml is None:
-			if session is None:
-				session = requests.Session()
+		if session is None:
+			session = requests.Session()
 			session.auth = (self.user, self.passwd)
-			res = session.get(self.host + path)
-			status_code = res.status_code
+			session = ICECATCacheControl(
+				session,
+				file_cache=self.file_cache,
+				**kw
+			)
 
-			if 200 <= status_code < 299:
-				filedir = os.path.dirname(dl_file)
-				if not os.path.exists(filedir):
-					os.makedirs(filedir)
-				with open(dl_file, 'wb') as of:
-					for chunk in res.iter_content(chunk_size=self.chunk_size):
-						if chunk:
-							of.write(chunk)
+		with session.get(url, stream=True) as res:
+			pass
 
-			objectified_xml = parser.parse(dl_file)
+		dl_file = self.file_cache.url_to_file_path(url)
+		objectified_xml = parser.parse(dl_file)
 
 		if hasattr(objectified_xml, 'xpath'):
 			for path in objectified_xml.xpath('//file/@path'):
-				self.dl_xml(path=path, session=session, force=force, root='')
+				self.dl_xml(path=path, session=session, root='', **kw)
 
 		return objectified_xml
 
-	def products(self, lang, force=False, with_index=''):
-		return self.dl_xml(path=lang, with_index=with_index or self._index)
+	def products(self, lang, **kw):
+		return self.dl_xml(path=lang, **kw)
 
-	def campaigns(self, force=False):
-		return self.dl_xml(path=self.refs % 'CampaignsList', force=force)
+	def campaigns(self, **kw):
+		return self.dl_xml(path=self.refs % 'CampaignsList', **kw)
 
-	def categories(self, force=False):
-		return self.dl_xml(path=self.refs_gz % 'CategoriesList', force=force)
+	def categories(self, **kw):
+		return self.dl_xml(path=self.refs_gz % 'CategoriesList', **kw)
 
-	def categoriesfeatures(self, force=False):
+	def categoriesfeatures(self, **kw):
 		return self.dl_xml(
-			path=self.refs_gz % 'CategoryFeaturesList', force=force, 
-			parser=categoriesfeatures_parser(),
+			path=self.refs_gz % 'CategoryFeaturesList', 
+			parser=categoriesfeatures_parser(), 
+			**kw
 		)
 
-	def featuregroups(self, force=False):
+	def featuregroups(self, **kw):
 		return self.dl_xml(
-			path=self.refs_gz % 'CategoryFeaturesList', force=force, 
-			parser=featuregroups_parser(),
+			path=self.refs_gz % 'CategoryFeaturesList', 
+			parser=featuregroups_parser(), 
+			**kw
 		)
 
-	def features(self, force=False):
-		return self.dl_xml(path=self.refs_gz % 'FeaturesList', force=force)
+	def features(self, **kw):
+		return self.dl_xml(path=self.refs_gz % 'FeaturesList', **kw)
 
-	def featurevalues(self, force=False):
-		return self.dl_xml(path=self.refs_gz % 'FeatureValuesVocabularyList', force=force)
+	def featurevalues(self, **kw):
+		return self.dl_xml(
+			path=self.refs_gz % 'FeatureValuesVocabularyList', **kw)
 
-	def languages(self, force=False):
-		return self.dl_xml(path=self.refs_gz % 'LanguageList', force=force)
+	def languages(self, **kw):
+		return self.dl_xml(path=self.refs_gz % 'LanguageList', **kw)
 
-	def measures(self, force=False):
-		return self.dl_xml(path=self.refs_gz % 'MeasuresList', force=force)
+	def measures(self, **kw):
+		return self.dl_xml(path=self.refs_gz % 'MeasuresList', **kw)
 
-	def relations(self, force=False):
-		return self.dl_xml(path=self.refs % 'RelationsList', force=force)
+	def relations(self, **kw):
+		return self.dl_xml(path=self.refs % 'RelationsList', **kw)
 
-	def supplierproductfamilies(self, force=False):
-		return self.dl_xml(path=self.refs_gz % 'SupplierProductFamiliesListRequest', force=force)
+	def supplierproductfamilies(self, **kw):
+		return self.dl_xml(
+			path=self.refs_gz % 'SupplierProductFamiliesListRequest', **kw)
 
-	def suppliers(self, force=False):
-		return self.dl_xml(path=self.refs_gz % 'SuppliersList', force=force)
+	def suppliers(self, **kw):
+		return self.dl_xml(path=self.refs_gz % 'SuppliersList', **kw)
 
 
 class categoriesfeatures_parser(etree.XMLParser):
@@ -134,13 +123,19 @@ class categoriesfeatures_parser(etree.XMLParser):
 					category = etree.SubElement(
 						doc_root, elem.tag, attrib=elem.attrib)
 				if elem.tag=='CategoryFeatureGroup':
-					categoryfeaturegroup = etree.SubElement(
-						category, elem.tag, attrib=elem.attrib)
+					if not category is None:
+						categoryfeaturegroup = etree.SubElement(
+							category, elem.tag, attrib=elem.attrib)
 				if elem.tag=='FeatureGroup':
-					featuregroup = etree.SubElement(
-						categoryfeaturegroup, elem.tag, attrib=elem.attrib)
+					if not categoryfeaturegroup is None:
+						featuregroup = etree.SubElement(
+							categoryfeaturegroup, elem.tag, attrib=elem.attrib)
 
 			if event == 'end':
+				if elem.tag=='Category':
+					category = None
+				if elem.tag=='CategoryFeatureGroup':
+					categoryfeaturegroup = None
 				elem.clear()
 				if root is None:
 					root = elem
@@ -216,16 +211,16 @@ class featuregroups_parser(etree.XMLParser):
 		return doc
 
 
-def langids(force=False):
+def langids(loader, **kw):
 	expression = '//LanguageList//Language[@ID and @ShortCode]'
-	languages = loader.languages(force=force).xpath(expression)
+	languages = loader.languages(**kw).xpath(expression)
 	return dict([
 		(lang.get('ShortCode'), lang.get('ID')) for lang in languages
 	])
 
-def measures(force=False):
+def measures(loader, **kw):
 	expression = '//MeasuresList//Measure[@ID and Sign]'
-	measures = loader.measures(force=force).xpath(expression)
+	measures = loader.measures(**kw).xpath(expression)
 	return dict([
 		(measure.find('Sign').text, measure.get('ID')) for measure in measures
 	])
@@ -244,15 +239,17 @@ if __name__ == '__main__':
 	lang = 'HE'
 	lang = 'INT'
 
-	#loader.products(lang=lang)
-	#loader.categories()
-	f = loader.categoriesfeatures()
-	#f = loader.featuregroups()
-	#loader.features()
-	#spf = loader.supplierproductfamilies()
+	#f = loader.products(lang=lang, cache_always_save=True)
+	#f = loader.categories()
+	#f = loader.categoriesfeatures()
+	#f = loader.featuregroups(cache_always_use=True)
+	#f = loader.features()
+	f = loader.languages(cache_always_fetch=True)
+	#f = loader.relations(cache_always_fetch=True)
+	#f = loader.supplierproductfamilies()
 	#f = loader.featurevalues()
 	#f = loader.features()
 	f.write(
 		'output.xml', xml_declaration=True, pretty_print=True, encoding='utf-8')
-	#langids()
+	#langids(loader)
 
